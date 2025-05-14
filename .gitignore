@@ -166,3 +166,6 @@ credentials.json
 **credentials.json
 token.json
 token.pickle
+
+config.yaml
+**config.yaml
