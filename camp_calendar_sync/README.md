@@ -15,7 +15,7 @@ A Python package for synchronizing HipCamp and Checkfront reservations with Goog
 ## Installation
 
 ```bash
-pip install camp-calendar-sync
+pip install -e .
 ```
 
 ## Usage

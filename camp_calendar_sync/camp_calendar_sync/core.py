@@ -99,6 +99,7 @@ HIPCAMP_TO_CHECKFRONT = {
     }
 }
 
+
 class LogLevel(Enum):
     """Logging levels for the script."""
     NORMAL = auto()
@@ -134,6 +135,203 @@ class Logger:
     def debug(self, message: str) -> None:
         """Log a debug priority message."""
         self.log(message, LogLevel.DEBUG)
+
+
+class CheckfrontAPI:
+    """
+    Client for interacting with the Checkfront API.
+    
+    Attributes:
+        host: Checkfront hostname
+        api_key: API key for authentication
+        api_secret: API secret for authentication
+    """
+    
+    def __init__(self, host: str, api_key: str, api_secret: str):
+        self.host = host
+        self.api_key = api_key
+        self.api_secret = api_secret
+    
+    def _make_request(
+        self,
+        endpoint: str,
+        method: str = "GET",
+        params: Optional[Dict] = None
+    ) -> Dict:
+        """
+        Make an authenticated request to the Checkfront API.
+        
+        Args:
+            endpoint: API endpoint to call
+            method: HTTP method (GET, POST, etc.)
+            params: Optional query parameters
+            
+        Returns:
+            API response as dictionary
+            
+        Raises:
+            requests.exceptions.RequestException: If the API request fails
+        """
+        # Create base64 encoded auth string
+        auth_string = f"{self.api_key}:{self.api_secret}"
+        auth_bytes = auth_string.encode('ascii')
+        base64_auth = base64.b64encode(auth_bytes).decode('ascii')
+
+        headers = {
+            "Authorization": f"Basic {base64_auth}",
+            "Content-Type": "application/json"
+        }
+        
+        url = f"https://{self.host}/api/3.0/{endpoint}"
+        print(f"\nMaking {method} request to Checkfront API:")
+        print(f"URL: {url}")
+        print(f"Headers: {headers}")
+        if params:
+            print(f"Params: {json.dumps(params, indent=2)}")
+            
+        response = requests.request(
+            method,
+            url,
+            headers=headers,
+            json=params if method == "POST" else None,
+            params=params if method != "POST" else None
+        )
+        
+        print(f"Response Status Code: {response.status_code}")
+        print(f"Response Headers: {dict(response.headers)}")
+        
+        try:
+            response_data = response.json()
+            print(f"Response Body: {json.dumps(response_data, indent=2)}")
+        except json.JSONDecodeError:
+            print(f"Response Body (raw): {response.text}")
+            
+        response.raise_for_status()
+        return response.json()
+    
+    def get_items(self) -> List[Dict]:
+        """
+        Get list of bookable items/sites.
+        
+        Returns:
+            List of available items
+            
+        Raises:
+            requests.exceptions.RequestException: If the API request fails
+        """
+        response = self._make_request("item")
+        return response.get("items", [])
+    
+    def get_events(
+        self,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None
+    ) -> List[Dict]:
+        """
+        Get list of events from Checkfront.
+        
+        Args:
+            start_date: Optional start date (YYYY-MM-DD)
+            end_date: Optional end date (YYYY-MM-DD)
+            
+        Returns:
+            List of events
+            
+        Raises:
+            requests.exceptions.RequestException: If the API request fails
+        """
+        params = {}
+        if start_date:
+            params["start_date"] = start_date
+        if end_date:
+            params["end_date"] = end_date
+            
+        response = self._make_request("event", params=params)
+        return response.get("events", [])
+    
+    def get_hipcamp_event_mapping(self) -> Dict[str, str]:
+        """
+        Get a mapping of HipCamp booking IDs to Checkfront event IDs.
+        The mapping is created by parsing the event names and notes.
+        
+        Returns:
+            Dictionary mapping HipCamp booking IDs to Checkfront event IDs
+            
+        Raises:
+            requests.exceptions.RequestException: If the API request fails
+        """
+        # Get events for the next year
+        now = datetime.datetime.now()
+        end_date = (now + datetime.timedelta(days=365)).strftime("%Y-%m-%d")
+        events = self.get_events(end_date=end_date)
+        
+        # Create mapping of HipCamp booking IDs to Checkfront event IDs
+        hipcamp_mapping = {}
+        
+        for event in events:
+            # Look for HipCamp booking ID in notes
+            notes = event.get("notes", "")
+            match = re.search(r"HipCamp Booking ID: (\d+)", notes)
+            if match:
+                hipcamp_id = match.group(1)
+                hipcamp_mapping[hipcamp_id] = event.get("event_id")
+                print(
+                    f"Found Checkfront event {event.get('event_id')} "
+                    f"for HipCamp booking {hipcamp_id}"
+                )
+        
+        return hipcamp_mapping
+    
+    def create_unavailable_event(
+        self,
+        start_date: str,
+        end_date: str,
+        name: str,
+        category_id: str,
+        item_id: str,
+        notes: Optional[str] = None
+    ) -> Dict:
+        """
+        Create an unavailable event in Checkfront.
+        
+        Args:
+            start_date: Start date (YYYY-MM-DD)
+            end_date: End date (YYYY-MM-DD)
+            name: Event name
+            category_id: Checkfront category ID
+            item_id: Checkfront item ID
+            notes: Optional event notes
+            
+        Returns:
+            Created event details
+            
+        Raises:
+            requests.exceptions.RequestException: If the API request fails
+        """
+        print("\nCreating Checkfront unavailable event:")
+        print(f"Name: {name}")
+        print(f"Start Date: {start_date}")
+        print(f"End Date: {end_date}")
+        print(f"Category ID: {category_id}")
+        print(f"Item ID: {item_id}")
+        if notes:
+            print(f"Notes: {notes}")
+            
+        data = {
+            "start_date": start_date,
+            "end_date": end_date,
+            "name": f"{name} - Unavailable",
+            "status": "U",  # U for unavailable
+            "apply_to": {
+                "category_id": category_id,
+                "item_id": item_id
+            }
+        }
+        
+        if notes:
+            data["notes"] = notes
+            
+        return self._make_request("event", method="POST", params=data)
 
 
 class CalendarEvent:

@@ -66,9 +66,9 @@ SITE_DISPLAY_NAMES = {
     "#1 Dropping In": "P1",
     "#2 Bunny Hop": "P2",
     "#3 Huck It!": "P3",
-    "#4": "P4",
-    "#5": "P5",
-    "#6": "P6",
+    "#4 Pedaler's Roost": "P4",
+    "#5 Cycle Life": "P5",
+    "#6 Comin' In Hot": "P6",
     "#7 Bike Escape": "P7",
     "#8 In The Zone": "P8",
     "#9 N_1": "P9",
@@ -103,15 +103,15 @@ HIPCAMP_TO_CHECKFRONT = {
         "category_id": "11",
         "item_id": "p3huckit"
     },
-    "#4": {
+    "#4 Pedaler's Roost": {
         "category_id": "11",
         "item_id": "p4pedalersroost"
     },
-    "#5": {
+    "#5 Cycle Life": {
         "category_id": "11",
         "item_id": "p5cyclelife"
     },
-    "#6": {
+    "#6 Comin' In Hot": {
         "category_id": "11",
         "item_id": "p6comininhot"
     },
@@ -141,9 +141,9 @@ HIPCAMP_ICAL_URLS = {
     "#1 Dropping In": "https://www.hipcamp.com/en-US/bookings/042e0cee-0952-4d18-9010-9b847e51446a/agenda.ics?cal=48461&s=607526",  # Add URL
     "#2 Bunny Hop": "https://www.hipcamp.com/en-US/bookings/042e0cee-0952-4d18-9010-9b847e51446a/agenda.ics?cal=48462&s=607527",  # Add URL
     "#3 Huck It!": "https://www.hipcamp.com/en-US/bookings/042e0cee-0952-4d18-9010-9b847e51446a/agenda.ics?cal=48463&s=643174",  # Add URL
-    "#4": "",  # Add URL
-    "#5": "",  # Add URL
-    "#6": "",  # Add URL
+    "#4 Pedaler's Roost": "https://www.hipcamp.com/en-US/bookings/042e0cee-0952-4d18-9010-9b847e51446a/agenda.ics?cal=86281&s=643175",  # Add URL
+    "#5 Cycle Life": "https://www.hipcamp.com/en-US/bookings/042e0cee-0952-4d18-9010-9b847e51446a/agenda.ics?cal=86279&s=643176",  # Add URL
+    "#6 Comin' In Hot": "https://www.hipcamp.com/en-US/bookings/042e0cee-0952-4d18-9010-9b847e51446a/agenda.ics?cal=86280&s=643177",  # Add URL
     "#7 Bike Escape": "https://www.hipcamp.com/en-US/bookings/042e0cee-0952-4d18-9010-9b847e51446a/agenda.ics?cal=48464&s=643178",  # Add URL
     "#8 In The Zone": "https://www.hipcamp.com/en-US/bookings/042e0cee-0952-4d18-9010-9b847e51446a/agenda.ics?cal=48465&s=643179",  # Add URL
     "#9 N_1": "https://www.hipcamp.com/en-US/bookings/042e0cee-0952-4d18-9010-9b847e51446a/agenda.ics?cal=48467&s=643180",  # Add URL
@@ -1162,7 +1162,7 @@ def main():
     
     This function:
     1. Authenticates with Google Calendar API
-    2. Finds the target calendar
+    2. Finds the target calendars
     3. Fetches events from Google Calendar, HipCamp, and Checkfront
     4. Syncs the events
     
@@ -1183,16 +1183,20 @@ def main():
     try:
         service = build("calendar", "v3", credentials=creds)
 
-        # First, list all calendars to find the DBR Camping calendar
+        # First, list all calendars to find the DBR Camping calendar and site-specific calendars
         logger.normal("Listing all calendars...")
         calendar_list = service.calendarList().list().execute()
         dbr_calendar_id = None
+        site_calendars = {}
         
         for calendar in calendar_list.get('items', []):
             logger.debug(f"Calendar: {calendar['summary']} (ID: {calendar['id']})")
             if calendar['summary'] == "DBR Camping":
                 dbr_calendar_id = calendar['id']
-                break
+            # Look for site-specific calendars (e.g., "P8 Checkfront")
+            for site_code in SITE_DISPLAY_NAMES.values():
+                if calendar['summary'] == f"{site_code} Checkfront":
+                    site_calendars[site_code] = calendar['id']
         
         if not dbr_calendar_id:
             logger.warn("DBR Camping calendar not found!")
@@ -1201,7 +1205,7 @@ def main():
         # Get events from all sources
         start_time = datetime.datetime.now(tz=datetime.timezone.utc)
         
-        # Get Google Calendar events
+        # Get Google Calendar events for main calendar
         google_events = get_google_calendar_events(
             service, dbr_calendar_id, start_time
         )
@@ -1218,7 +1222,7 @@ def main():
         checkfront_events = fetch_checkfront_events()
         logger.normal(f"Found {len(checkfront_events)} events in Checkfront")
         
-        # Sync events to Google Calendar
+        # Sync events to main Google Calendar
         sync_events_to_calendar(
             service,
             dbr_calendar_id,
@@ -1226,6 +1230,36 @@ def main():
             checkfront_events,
             google_events
         )
+        
+        # Sync Checkfront events to site-specific calendars
+        for site_code, calendar_id in site_calendars.items():
+            logger.normal(f"\nSyncing events to {site_code} Checkfront calendar...")
+            
+            # Get existing events for this calendar
+            site_events = get_google_calendar_events(
+                service, calendar_id, start_time
+            )
+            logger.normal(
+                f"Found {len(site_events)} events in {site_code} Checkfront calendar"
+            )
+            
+            # Filter Checkfront events for this site
+            site_checkfront_events = [
+                event for event in checkfront_events
+                if event.summary.startswith(f"{site_code} -")
+            ]
+            logger.normal(
+                f"Found {len(site_checkfront_events)} Checkfront events for {site_code}"
+            )
+            
+            # Sync events to site-specific calendar
+            sync_events_to_calendar(
+                service,
+                calendar_id,
+                [],  # No HipCamp events for site-specific calendars
+                site_checkfront_events,
+                site_events
+            )
 
     except HttpError as error:
         if "insufficientPermissions" in str(error):
