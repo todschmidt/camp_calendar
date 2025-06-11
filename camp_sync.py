@@ -276,6 +276,39 @@ def load_checkfront_credentials() -> tuple[str, str]:
 # Load Checkfront credentials
 CHECKFRONT_API_KEY, CHECKFRONT_API_SECRET = load_checkfront_credentials()
 
+class CalendarEvent:
+    """
+    Represents a calendar event from any source (Google Calendar or HipCamp).
+    
+    Attributes:
+        start_time: Start time of the event
+        end_time: End time of the event
+        summary: Event title/summary
+        description: Optional event description
+        source: Source of the event (e.g., "hipcamp" or "google_calendar")
+        source_id: ID of the event in its source system
+        google_event_id: ID of the event in Google Calendar (if synced)
+    """
+    
+    def __init__(
+        self,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+        summary: str,
+        description: Optional[str] = None,
+        source: str = "unknown",
+        source_id: Optional[str] = None,
+        google_event_id: Optional[str] = None,
+    ):
+        self.start_time = start_time
+        self.end_time = end_time
+        self.summary = summary
+        self.description = description
+        self.source = source
+        self.source_id = source_id
+        self.google_event_id = google_event_id
+
+
 class CheckfrontAPI:
     """
     Client for interacting with the Checkfront API.
@@ -290,6 +323,7 @@ class CheckfrontAPI:
         self.host = host
         self.api_key = api_key
         self.api_secret = api_secret
+        self._session_id = None  # Store active session ID
     
     def _make_request(
         self,
@@ -326,7 +360,7 @@ class CheckfrontAPI:
         logger.debug(f"URL: {url}")
         logger.debug(f"Headers: {headers}")
         if params:
-            logger.debug(f"Params: {json.dumps(params, indent=2)}")
+            logger.debug(f"Request Body: {json.dumps(params, indent=2)}")
             
         response = requests.request(
             method,
@@ -472,6 +506,407 @@ class CheckfrontAPI:
             
         return self._make_request("event", method="POST", params=data)
 
+    def create_booking_session(self) -> str:
+        """
+        Create a new booking session.
+        
+        Returns:
+            Session ID for the new booking session
+            
+        Raises:
+            requests.exceptions.RequestException: If the API request fails
+            ValueError: If no session ID is found in the response
+        """
+        logger.warn("Creating new Checkfront booking session...")
+        response = self._make_request("booking/session", method="POST")
+        # Session ID is nested in the response as booking.session.id
+        session = response.get("booking", {}).get("session", {})
+        self._session_id = session.get("id")
+        if not self._session_id:
+            error_msg = (
+                "No session ID found in Checkfront API response. "
+                f"Response: {json.dumps(response, indent=2)}"
+            )
+            logger.normal(f"Failed to create booking session: {error_msg}")
+            raise ValueError(error_msg)
+        logger.warn(f"Created booking session: {self._session_id}")
+        return self._session_id
+    
+    def add_item_to_session(
+        self,
+        item_id: str,
+        start_date: str,
+        end_date: str,
+        quantity: int = 1,
+        params: Optional[Dict] = None
+    ) -> Dict:
+        """
+        Add an item to the current booking session.
+        
+        Args:
+            item_id: Checkfront item ID
+            start_date: Start date (YYYY-MM-DD)
+            end_date: End date (YYYY-MM-DD)
+            quantity: Number of items to book
+            params: Optional additional parameters
+            
+        Returns:
+            Session details with added item
+            
+        Raises:
+            requests.exceptions.RequestException: If the API request fails
+            ValueError: If no active session exists, if no SLIP is returned,
+                      or if the item is unavailable/overbooked
+        """
+        if not self._session_id:
+            error_msg = "No active booking session"
+            logger.warn(f"Failed to add item to session: {error_msg}")
+            raise ValueError(error_msg)
+            
+        # Convert dates to Checkfront format (YYYYMMDD)
+        cf_start_date = start_date.replace("-", "")
+        cf_end_date = end_date.replace("-", "")
+            
+        # Get rated item details first
+        item_params = {
+            "start_date": cf_start_date,
+            "end_date": cf_end_date,
+            "param": {
+                "qty": str(quantity)
+            }
+        }
+        if params:
+            item_params["param"].update(params)
+            
+        logger.warn(
+            f"Getting availability for {item_id} "
+            f"({start_date} to {end_date})"
+        )
+        
+        # Get rated item details to get the SLIP
+        rated_item = self._make_request(
+            f"item/{item_id}",
+            params=item_params
+        )
+        
+        # Check rate status and availability
+        rate = rated_item.get("item", {}).get("rate", {})
+        status = rate.get("status")
+        
+        if status == "ERROR":
+            error = rate.get("error", {})
+            error_id = error.get("id")
+            error_title = error.get("title", "Unknown error")
+            error_msg = (
+                f"Item {item_id} is unavailable: {error_title} "
+                f"(Error ID: {error_id})"
+            )
+            logger.warn(f"Failed to add item to session: {error_msg}")
+            if logger.level == LogLevel.DEBUG:
+                raise ValueError(
+                    f"{error_msg}. Response: {json.dumps(rated_item, indent=2)}"
+                )
+            else:
+                raise ValueError(error_msg)
+        elif status != "AVAILABLE":
+            error_msg = f"Item {item_id} has unexpected status: {status}"
+            logger.warn(f"Failed to add item to session: {error_msg}")
+            if logger.level == LogLevel.DEBUG:
+                raise ValueError(
+                    f"{error_msg}. Response: {json.dumps(rated_item, indent=2)}"
+                )
+            else:
+                raise ValueError(error_msg)
+            
+        # Extract the SLIP from the rated response
+        slip = rate.get("slip")
+        if not slip:
+            error_msg = f"No SLIP returned for item {item_id}"
+            logger.warn(f"Failed to add item to session: {error_msg}")
+            if logger.level == LogLevel.DEBUG:
+                raise ValueError(
+                    f"{error_msg}. Response: {json.dumps(rated_item, indent=2)}"
+                )
+            else:
+                raise ValueError(error_msg)
+            
+        logger.warn(f"Got SLIP for item {item_id}: {slip}")
+        logger.warn(f"Adding item {item_id} to booking session...")
+            
+        # Add item to session using SLIP
+        session_params = {
+            "session_id": self._session_id,
+            "slip": slip
+        }
+        
+        response = self._make_request(
+            "booking/session",
+            method="POST",
+            params=session_params
+        )
+        
+        # Verify the item was added to the session
+        session = response.get("booking", {}).get("session", {})
+        items = session.get("item", [])
+        
+        if not items:
+            error_msg = f"Failed to add item {item_id} to session - no items in session"
+            logger.warn(f"Failed to add item to session: {error_msg}")
+            if logger.level == LogLevel.WARN:
+                raise ValueError(
+                    f"{error_msg}. Response: {json.dumps(response, indent=2)}"
+                )
+            else:
+                raise ValueError(error_msg)
+
+        # Log session details in debug mode
+        if logger.level == LogLevel.DEBUG:
+            logger.debug(
+                f"Session details after adding item:\n"
+                f"Session ID: {session.get('id')}\n"
+                f"Items: {json.dumps(items, indent=2)}\n"
+                f"Total: {session.get('total')}"
+            )
+            
+        logger.warn(f"Successfully added item {item_id} to booking session")
+        return response
+    
+    def create_booking(
+        self,
+        customer_info: Dict[str, str],
+        notes: Optional[str] = None
+    ) -> Dict:
+        """
+        Create a booking from the current session.
+        
+        Args:
+            customer_info: Dictionary of customer information
+            notes: Optional booking notes
+            
+        Returns:
+            Created booking details
+            
+        Raises:
+            requests.exceptions.RequestException: If the API request fails
+            ValueError: If no active session exists or if the booking creation fails
+        """
+        if not self._session_id:
+            error_msg = "No active booking session"
+            logger.normal(f"Failed to create booking: {error_msg}")
+            raise ValueError(error_msg)
+            
+        logger.warn("Getting required booking form fields...")
+        # Get booking form fields
+        form_response = self._make_request("booking/form")
+        form_fields = form_response.get("booking_form_ui", {})
+        
+        # Find required fields by checking customer.required flag
+        required_fields = []
+        for field_name, field_data in form_fields.items():
+            if not isinstance(field_data, dict):
+                continue
+                
+            define = field_data.get("define", {})
+            layout = define.get("layout", {})
+            customer = layout.get("customer", {})
+            
+            # Check if field is required for customers
+            if customer.get("required") == 1:
+                field_label = layout.get("lbl", field_name)
+                required_fields.append((field_name, field_label))
+        
+        logger.warn(f"Required fields: {json.dumps([f[1] for f in required_fields], indent=2)}")
+
+        # Create default customer info with standard fields
+        default_customer_info = {
+            "customer_name": customer_info.get("name", "Guest"),
+            "customer_email": customer_info.get("email", "guest@example.com"),
+            "customer_phone": customer_info.get("phone", "555-555-5555"),
+            # Add default values for camping-specific fields with exact field names from API
+            "camping_setup": "No",
+            "vehicle__trailer_camping": "No",
+            "RV_details": "N/A",
+            "trailer_details": "N/A"
+        }
+        
+        # Merge provided customer info with defaults
+        # Convert any provided field names to match Checkfront's format
+        field_mapping = {
+            "name": "customer_name",
+            "email": "customer_email",
+            "phone": "customer_phone",
+            # Add mappings for camping fields using exact API field names
+            "tent_camping": "camping_setup",
+            "vehicle_trailer_camping": "vehicle__trailer_camping",
+            "rv_details": "RV_details",
+            "trailer_details": "trailer_details"
+        }
+        
+        merged_customer_info = default_customer_info.copy()
+        for key, value in customer_info.items():
+            # Map common field names to Checkfront format
+            checkfront_key = field_mapping.get(key, key)
+            if value:  # Only update if value is not empty
+                merged_customer_info[checkfront_key] = value
+
+        # Validate required fields
+        missing_fields = []
+        for field_name, field_label in required_fields:
+            if field_name not in merged_customer_info or not merged_customer_info[field_name]:
+                missing_fields.append(field_label)
+                
+        if missing_fields:
+            error_msg = (
+                f"Missing required customer fields: {', '.join(missing_fields)}"
+            )
+            logger.normal(f"Failed to create booking: {error_msg}")
+            raise ValueError(error_msg)
+            
+        # Create booking
+        logger.warn("Creating booking with customer information...")
+        
+        # Ensure all values are JSON-serializable
+        serializable_customer_info = {}
+        for key, value in merged_customer_info.items():
+            if isinstance(value, set):
+                serializable_customer_info[key] = list(value)
+            else:
+                serializable_customer_info[key] = value
+                
+        logger.warn(f"Customer information: {json.dumps(serializable_customer_info, indent=2)}")
+        
+        # Format customer information as form parameters
+        booking_data = {
+            "session_id": self._session_id,
+            "form": serializable_customer_info  # Send as a single object
+        }
+        
+        if notes:
+            booking_data["notes"] = notes
+            
+        logger.warn(f"Booking data: {json.dumps(booking_data, indent=2)}")
+        
+        response = self._make_request(
+            "booking/create",
+            method="POST",
+            params=booking_data
+        )
+        
+        # Check for errors in the response
+        request_status = response.get("request", {}).get("status")
+        if request_status == "ERROR":
+            error = response.get("request", {}).get("error", {})
+            error_id = error.get("id", "unknown_error")
+            error_title = error.get("title", "Unknown error")
+            error_details = error.get("details", "")
+            error_msg = f"Booking creation failed: {error_title}"
+            if error_details:
+                error_msg += f" - {error_details}"
+            logger.warn(f"Failed to create booking: {error_msg}")
+            if logger.level == LogLevel.DEBUG:
+                raise ValueError(
+                    f"{error_msg} (Error ID: {error_id}). "
+                    f"Response: {json.dumps(response, indent=2)}"
+                )
+            else:
+                raise ValueError(error_msg)
+                
+        logger.normal("Successfully created booking")
+        return response
+    
+    def create_hipcamp_booking(
+        self,
+        event: CalendarEvent,
+        customer_info: Dict[str, str]
+    ) -> Optional[str]:
+        """
+        Create a Checkfront booking for a HipCamp event.
+        
+        Args:
+            event: HipCamp calendar event
+            customer_info: Dictionary of customer information
+            
+        Returns:
+            Checkfront booking ID if successful, None otherwise
+            
+        Raises:
+            requests.exceptions.RequestException: If the API request fails
+        """
+        try:
+            # Get the HipCamp site name from the event summary
+            # Format: "HT1 - John Smith"
+            site_display_name = event.summary.split(" - ", 1)[0]
+            
+            # Find the original HipCamp site name
+            hipcamp_site_name = None
+            for site, display_name in SITE_DISPLAY_NAMES.items():
+                if display_name == site_display_name:
+                    hipcamp_site_name = site
+                    break
+            
+            if not hipcamp_site_name:
+                error_msg = f"Could not find HipCamp site for display name: {site_display_name}"
+                logger.normal(f"Failed to create Checkfront booking: {error_msg}")
+                return None
+            
+            # Get Checkfront mapping
+            cf_mapping = HIPCAMP_TO_CHECKFRONT.get(hipcamp_site_name)
+            if not cf_mapping:
+                error_msg = f"No Checkfront mapping found for HipCamp site: {hipcamp_site_name}"
+                logger.normal(f"Failed to create Checkfront booking: {error_msg}")
+                return None
+            
+            logger.normal(
+                f"Creating Checkfront booking for {site_display_name} "
+                f"(HipCamp ID: {event.source_id})"
+            )
+            
+            # Create booking session
+            self.create_booking_session()
+            
+            # Add item to session
+            self.add_item_to_session(
+                item_id=cf_mapping["item_id"],
+                start_date=event.start_time.strftime("%Y-%m-%d"),
+                end_date=event.end_time.strftime("%Y-%m-%d")
+            )
+            
+            # Create booking with customer info and HipCamp reference
+            booking = self.create_booking(
+                customer_info=customer_info,
+                notes=f"HipCamp Booking ID: {event.source_id}"
+            )
+            
+            logger.warn(f"Full booking response: {json.dumps(booking, indent=2)}")
+            
+            # Try different possible fields for booking ID
+            booking_id = (
+                booking.get("booking", {}).get("id") or
+                booking.get("booking_id") or 
+                booking.get("id") or 
+                booking.get("booking", {}).get("booking_id")
+            )
+            
+            if booking_id:
+                logger.normal(
+                    f"Created Checkfront booking {booking_id} for {site_display_name} "
+                    f"(HipCamp ID: {event.source_id})"
+                )
+            else:
+                logger.normal(
+                    f"Failed to create Checkfront booking for {site_display_name} "
+                    f"(HipCamp ID: {event.source_id}): No booking ID in response. "
+                    f"Response keys: {list(booking.keys())}"
+                )
+            return booking_id
+            
+        except Exception as e:
+            logger.normal(f"Error creating Checkfront booking: {e}")
+            return None
+        finally:
+            # Clear session ID
+            self._session_id = None
+
 # Create Checkfront API client
 checkfront = CheckfrontAPI(
     CHECKFRONT_HOST,
@@ -528,39 +963,6 @@ def get_google_credentials(force_refresh: bool = False) -> Credentials:
             token.write(creds.to_json())
             
     return creds
-
-
-class CalendarEvent:
-    """
-    Represents a calendar event from any source (Google Calendar or HipCamp).
-    
-    Attributes:
-        start_time: Start time of the event
-        end_time: End time of the event
-        summary: Event title/summary
-        description: Optional event description
-        source: Source of the event (e.g., "hipcamp" or "google_calendar")
-        source_id: ID of the event in its source system
-        google_event_id: ID of the event in Google Calendar (if synced)
-    """
-    
-    def __init__(
-        self,
-        start_time: datetime.datetime,
-        end_time: datetime.datetime,
-        summary: str,
-        description: Optional[str] = None,
-        source: str = "unknown",
-        source_id: Optional[str] = None,
-        google_event_id: Optional[str] = None,
-    ):
-        self.start_time = start_time
-        self.end_time = end_time
-        self.summary = summary
-        self.description = description
-        self.source = source
-        self.source_id = source_id
-        self.google_event_id = google_event_id
 
 
 def extract_booking_id(description: str) -> Optional[str]:
@@ -808,6 +1210,12 @@ def fetch_checkfront_events() -> List[CalendarEvent]:
             
             # Get guest info and location
             guest_info = str(event.get("summary", ""))
+            
+            # Skip events that were created from HipCamp bookings
+            if "(HipCamp)" in guest_info:
+                logger.debug(f"Skipping Checkfront event from HipCamp: {guest_info}")
+                continue
+                
             location = str(event.get("location", ""))
             
             # Clean up location name to match HipCamp format
@@ -920,6 +1328,35 @@ def normalize_datetime(
     return dt
 
 
+def _extract_customer_info_from_hipcamp_event(event: CalendarEvent) -> Dict[str, str]:
+    """Extracts customer information from a HipCamp event description."""
+    customer_info = {}
+    if not event.description:
+        return {}
+
+    lines = event.description.split("\n")
+    guest_info = lines[0]
+    name = guest_info.split(" - ")[0].strip()
+    # Append (HipCamp) to the name to identify these bookings
+    customer_info["name"] = f"{name} (HipCamp)"
+
+    # Try to find email in description
+    email = None
+    for line in lines:
+        if "@" in line and "." in line:
+            email = line.strip()
+            break
+    
+    if email:
+        customer_info["email"] = email
+    else:
+        # Create sanitized email from name
+        sanitized_name = re.sub(r'[^a-zA-Z0-9]', '', name.lower())
+        customer_info["email"] = f"{sanitized_name}@example.com"
+        
+    return customer_info
+
+
 def sync_events_to_calendar(
     service,
     calendar_id: str,
@@ -934,7 +1371,7 @@ def sync_events_to_calendar(
     1. Creates new events for new reservations
     2. Updates existing events if they've changed
     3. Deletes events that no longer exist in either source
-    4. Creates Checkfront unavailable events for new HipCamp events
+    4. Creates Checkfront bookings for new HipCamp events
     
     Args:
         service: Google Calendar API service instance
@@ -1079,16 +1516,22 @@ def sync_events_to_calendar(
                             f"Updated HipCamp event: {summary} "
                             f"(ID: {source_id})"
                         )
-                        # Check if we need to create/update Checkfront event
+                        # Check if we need to create/update Checkfront booking
                         if source_id not in hipcamp_to_checkfront:
-                            checkfront_id = create_checkfront_event(event)
+                            # Extract customer info from event description
+                            customer_info = _extract_customer_info_from_hipcamp_event(event)
+                            
+                            # Create Checkfront booking
+                            checkfront_id = checkfront.create_hipcamp_booking(
+                                event,
+                                customer_info
+                            )
                             if checkfront_id:
-                                logger.debug(
-                                    f"Created Checkfront unavailable event: "
-                                    f"{checkfront_id} for HipCamp booking "
-                                    f"{source_id}"
+                                logger.normal(
+                                    f"Created Checkfront booking: {checkfront_id} "
+                                    f"for HipCamp booking {source_id}"
                                 )
-                                # Update the event with the Checkfront event ID
+                                # Update the event with the Checkfront booking ID
                                 google_event["extendedProperties"][
                                     "private"
                                 ]["checkfront_event_id"] = checkfront_id
@@ -1099,7 +1542,7 @@ def sync_events_to_calendar(
                                 ).execute()
                                 logger.debug(
                                     f"Linked HipCamp booking {source_id} "
-                                    f"with Checkfront event {checkfront_id}"
+                                    f"with Checkfront booking {checkfront_id}"
                                 )
                     else:
                         logger.normal(
@@ -1117,14 +1560,21 @@ def sync_events_to_calendar(
                         f"Created HipCamp event: {summary} "
                         f"(ID: {source_id})"
                     )
-                    # Create Checkfront unavailable event for new HipCamp event
-                    checkfront_id = create_checkfront_event(event)
+                    # Create Checkfront booking for new HipCamp event
+                    # Extract customer info from event description
+                    customer_info = _extract_customer_info_from_hipcamp_event(event)
+                    
+                    # Create Checkfront booking
+                    checkfront_id = checkfront.create_hipcamp_booking(
+                        event,
+                        customer_info
+                    )
                     if checkfront_id:
                         logger.normal(
-                            f"Created Checkfront unavailable event: "
-                            f"{checkfront_id} for HipCamp booking {source_id}"
+                            f"Created Checkfront booking: {checkfront_id} "
+                            f"for HipCamp booking {source_id}"
                         )
-                        # Update the event with the Checkfront event ID
+                        # Update the event with the Checkfront booking ID
                         google_event["extendedProperties"][
                             "private"
                         ]["checkfront_event_id"] = checkfront_id
@@ -1135,7 +1585,7 @@ def sync_events_to_calendar(
                         ).execute()
                         logger.debug(
                             f"Linked HipCamp booking {source_id} "
-                            f"with Checkfront event {checkfront_id}"
+                            f"with Checkfront booking {checkfront_id}"
                         )
                 else:
                     logger.normal(
