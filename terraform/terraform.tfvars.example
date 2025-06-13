@@ -1,0 +1,11 @@
+# Example variables for the Terraform deployment.
+# Rename this file to terraform.tfvars and fill in the values.
+
+# The AWS region to deploy resources in.
+aws_region = "us-west-2"
+
+# The email address to send DLQ failure notifications to.
+notification_email = "user@yourmail.com"
+
+# The domain name to use for receiving trigger emails (e.g., example.com).
+email_domain = "domain.com"

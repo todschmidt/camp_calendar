@@ -10,31 +10,6 @@ terraform {
   }
 }
 
-# Define variables
-variable "aws_region" {
-  description = "The AWS region to deploy resources in."
-  type        = string
-  default     = "us-west-2"
-}
-
-variable "function_name" {
-  description = "The name of the Lambda function."
-  type        = string
-  default     = "camp-calendar-sync"
-}
-
-variable "notification_email" {
-  description = "The email address to send DLQ failure notifications to."
-  type        = string
-  default     = "dupontbikeretreat@gmail.com"
-}
-
-variable "email_domain" {
-  description = "The domain name to use for receiving trigger emails (e.g., example.com)."
-  type        = string
-  default     = "dupontbikeretreat.com"
-}
-
 # Create an S3 bucket to store Lambda deployment packages.
 # It's a best practice to version deployment artifacts.
 resource "aws_s3_bucket" "lambda_deployments" {
@@ -544,19 +519,3 @@ resource "aws_ses_receipt_rule" "email_to_sns" {
     object_key_prefix = "emails"
   }
 }
-
-# --- Outputs ---
-output "webhook_url" {
-  description = "The invocation URL for the Checkfront webhook."
-  value       = "${aws_apigatewayv2_stage.default_stage.invoke_url}/sync"
-}
-
-output "ses_domain_verification_token" {
-  description = "The TXT record value needed to verify your domain with SES. This should be a TXT record with the name '_amazonses.your-domain.com'."
-  value       = aws_ses_domain_identity.email_trigger_domain.verification_token
-}
-
-output "ses_spf_record" {
-  description = "The recommended SPF TXT record value for your domain to improve email deliverability for SES. This should be a TXT record on the root domain."
-  value       = "v=spf1 include:amazonses.com ~all"
-} 
