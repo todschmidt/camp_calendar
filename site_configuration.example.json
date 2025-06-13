@@ -1,0 +1,163 @@
+{
+  "CHECKFRONT_HOST": "dupont-bike-retreat.checkfront.com",
+  "CHECKFRONT_ICAL_URL": "https://dupont-bike-retreat.checkfront.com/view/bookings/ics/?id=9dadb199fc90cd1f3dd6427bf9c1eb3df155d4becdb2c55636be5d5b07e17ef4",
+  "SITE_DISPLAY_NAMES": {
+    "HillTop #1": "HT1",
+    "HillTop #2": "HT2",
+    "#1 Dropping In": "P1",
+    "#2 Bunny Hop": "P2",
+    "#3 Huck It!": "P3",
+    "#4 Pedaler's Roost": "P4",
+    "#5 Cycle Life": "P5",
+    "#6 Comin' In Hot": "P6",
+    "#7 Bike Escape": "P7",
+    "#8 In The Zone": "P8",
+    "#9 N_1": "P9",
+    "#10 Missing Link": "P10"
+  },
+  "HIPCAMP_TO_CHECKFRONT": {
+    "HillTop #1": {
+      "category_id": "2",
+      "item_id": "h1hilltop"
+    },
+    "HillTop #2": {
+      "category_id": "2",
+      "item_id": "h2hilltop"
+    },
+    "#1 Dropping In": {
+      "category_id": "11",
+      "item_id": "p1droppingin"
+    },
+    "#2 Bunny Hop": {
+      "category_id": "11",
+      "item_id": "p2bunnyhop"
+    },
+    "#3 Huck It!": {
+      "category_id": "11",
+      "item_id": "p3huckit"
+    },
+    "#4 Pedaler's Roost": {
+      "category_id": "11",
+      "item_id": "p4pedalersroost"
+    },
+    "#5 Cycle Life": {
+      "category_id": "11",
+      "item_id": "p5cyclelife"
+    },
+    "#6 Comin' In Hot": {
+      "category_id": "11",
+      "item_id": "p6comininhot"
+    },
+    "#7 Bike Escape": {
+      "category_id": "11",
+      "item_id": "p7bikeescape"
+    },
+    "#8 In The Zone": {
+      "category_id": "11",
+      "item_id": "p8inthezone"
+    },
+    "#9 N_1": {
+      "category_id": "11",
+      "item_id": "p9n1"
+    },
+    "#10 Missing Link": {
+      "category_id": "11",
+      "item_id": "p10missinglink"
+    }
+  },
+  "HIPCAMP_ICAL_URLS": {
+    "HillTop #1": "https://www.hipcamp.com/en-US/bookings/042e0cee-0952-4d18-9010-9b847e51446a/agenda.ics?cal=48436&s=583082",
+    "HillTop #2": "https://www.hipcamp.com/en-US/bookings/042e0cee-0952-4d18-9010-9b847e51446a/agenda.ics?cal=68433&s=583083",
+    "#1 Dropping In": "https://www.hipcamp.com/en-US/bookings/042e0cee-0952-4d18-9010-9b847e51446a/agenda.ics?cal=48461&s=607526",
+    "#2 Bunny Hop": "https://www.hipcamp.com/en-US/bookings/042e0cee-0952-4d18-9010-9b847e51446a/agenda.ics?cal=48462&s=607527",
+    "#3 Huck It!": "https://www.hipcamp.com/en-US/bookings/042e0cee-0952-4d18-9010-9b847e51446a/agenda.ics?cal=48463&s=643174",
+    "#4 Pedaler's Roost": "https://www.hipcamp.com/en-US/bookings/042e0cee-0952-4d18-9010-9b847e51446a/agenda.ics?cal=86281&s=643175",
+    "#5 Cycle Life": "https://www.hipcamp.com/en-US/bookings/042e0cee-0952-4d18-9010-9b847e51446a/agenda.ics?cal=86279&s=643176",
+    "#6 Comin' In Hot": "https://www.hipcamp.com/en-US/bookings/042e0cee-0952-4d18-9010-9b847e51446a/agenda.ics?cal=86280&s=643177",
+    "#7 Bike Escape": "https://www.hipcamp.com/en-US/bookings/042e0cee-0952-4d18-9010-9b847e51446a/agenda.ics?cal=48464&s=643178",
+    "#8 In The Zone": "https://www.hipcamp.com/en-US/bookings/042e0cee-0952-4d18-9010-9b847e51446a/agenda.ics?cal=48465&s=643179",
+    "#9 N_1": "https://www.hipcamp.com/en-US/bookings/042e0cee-0952-4d18-9010-9b847e51446a/agenda.ics?cal=48467&s=643180",
+    "#10 Missing Link": "https://www.hipcamp.com/en-US/bookings/042e0cee-0952-4d18-9010-9b847e51446a/agenda.ics?cal=84802&s=643181"
+  }
+}{
+  "CHECKFRONT_HOST": "your-company.checkfront.com",
+  "CHECKFRONT_ICAL_URL": "https://your-company.checkfront.com/view/bookings/ics/?id=your-ical-id",
+  "SITE_DISPLAY_NAMES": {
+    "HillTop #1": "HT1",
+    "HillTop #2": "HT2",
+    "#1 Dropping In": "P1",
+    "#2 Bunny Hop": "P2",
+    "#3 Huck It!": "P3",
+    "#4 Pedaler's Roost": "P4",
+    "#5 Cycle Life": "P5",
+    "#6 Comin' In Hot": "P6",
+    "#7 Bike Escape": "P7",
+    "#8 In The Zone": "P8",
+    "#9 N_1": "P9",
+    "#10 Missing Link": "P10"
+  },
+  "HIPCAMP_TO_CHECKFRONT": {
+    "HillTop #1": {
+      "category_id": "2",
+      "item_id": "h1hilltop"
+    },
+    "HillTop #2": {
+      "category_id": "2",
+      "item_id": "h2hilltop"
+    },
+    "#1 Dropping In": {
+      "category_id": "11",
+      "item_id": "p1droppingin"
+    },
+    "#2 Bunny Hop": {
+      "category_id": "11",
+      "item_id": "p2bunnyhop"
+    },
+    "#3 Huck It!": {
+      "category_id": "11",
+      "item_id": "p3huckit"
+    },
+    "#4 Pedaler's Roost": {
+      "category_id": "11",
+      "item_id": "p4pedalersroost"
+    },
+    "#5 Cycle Life": {
+      "category_id": "11",
+      "item_id": "p5cyclelife"
+    },
+    "#6 Comin' In Hot": {
+      "category_id": "11",
+      "item_id": "p6comininhot"
+    },
+    "#7 Bike Escape": {
+      "category_id": "11",
+      "item_id": "p7bikeescape"
+    },
+    "#8 In The Zone": {
+      "category_id": "11",
+      "item_id": "p8inthezone"
+    },
+    "#9 N_1": {
+      "category_id": "11",
+      "item_id": "p9n1"
+    },
+    "#10 Missing Link": {
+      "category_id": "11",
+      "item_id": "p10missinglink"
+    }
+  },
+  "HIPCAMP_ICAL_URLS": {
+    "HillTop #1": "YOUR_ICAL_URL_HERE",
+    "HillTop #2": "YOUR_ICAL_URL_HERE",
+    "#1 Dropping In": "YOUR_ICAL_URL_HERE",
+    "#2 Bunny Hop": "YOUR_ICAL_URL_HERE",
+    "#3 Huck It!": "YOUR_ICAL_URL_HERE",
+    "#4 Pedaler's Roost": "YOUR_ICAL_URL_HERE",
+    "#5 Cycle Life": "YOUR_ICAL_URL_HERE",
+    "#6 Comin' In Hot": "YOUR_ICAL_URL_HERE",
+    "#7 Bike Escape": "YOUR_ICAL_URL_HERE",
+    "#8 In The Zone": "YOUR_ICAL_URL_HERE",
+    "#9 N_1": "YOUR_ICAL_URL_HERE",
+    "#10 Missing Link": "YOUR_ICAL_URL_HERE"
+  }
+} 

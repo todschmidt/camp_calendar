@@ -23,15 +23,16 @@ automated deployments.
 
 ```
 +----------------+      +-------------+      +-------------+      +-----------------+
-| HipCamp        |----->| API Gateway |----->| SQS Queue   |----->| AWS Lambda      |
+| Checkfront     |----->| API Gateway |----->| SQS Queue   |----->| AWS Lambda      |
 | (Webhook)      |      +-------------+      +-------------+      | (Processing)    |
 +----------------+                                               +-------+---------+
                                                                          |
                                                                          |
                                                                +---------v---------+
                                                                | Checkfront API    |
-                                                               +-------------------+
-                                                               | Google Calendar   |
+                                                               +-------------------+     +------------------+
+                                                               | Google Calendars  |---->| Hipcamp Calendar +
+                                                               |                   |     +------------------+
                                                                +-------------------+
 ```
 
@@ -71,10 +72,14 @@ The script can still be run locally for testing. It will default to using local 
     ```bash
     pip install -r camp_sync/requirements.txt
     ```
-2.  **Create Credential Files**:
-    -   `checkfront_credentials.json`
+2.  **Create Credential and Configuration Files**:
+    -   `checkfront_credentials.json` (from `checkfront_credentials.example.json`)
     -   `google_credentials.json` (obtained from Google Cloud Console)
-    -   `token.json` (generated automatically on the first run)
+    -   `token.json` (generated automatically on the first run after auth)
+    -   `site_configuration.json` (from `site_configuration.example.json`)
+
+    For local development, you must rename `site_configuration.example.json` to `site_configuration.json` and fill in your actual Checkfront and Hipcamp details.
+
 3.  **Run the script**:
     The `debug_runner.py` script allows you to simulate a webhook event by reading a payload from a local file (`temp.txt`).
 
@@ -157,6 +162,38 @@ Before deploying, you must create and populate the secrets in AWS Secrets Manage
     }
     ```
 
+#### Secret 4: `site_configuration`
+
+-   **Secret name**: `site_configuration`
+-   **Secret value**: This secret holds all external configuration, including the Checkfront endpoint details and the mappings for your sites.
+
+    **Syntax Example**:
+    ```json
+    {
+      "CHECKFRONT_HOST": "your-company.checkfront.com",
+      "CHECKFRONT_ICAL_URL": "https://your-company.checkfront.com/view/bookings/ics/?id=your-ical-id",
+      "SITE_DISPLAY_NAMES": {
+        "HillTop #1": "HT1",
+        "HillTop #2": "HT2",
+        "#1 Dropping In": "P1"
+      },
+      "HIPCAMP_TO_CHECKFRONT": {
+        "HillTop #1": {
+          "category_id": "2",
+          "item_id": "h1hilltop"
+        },
+        "#1 Dropping In": {
+          "category_id": "11",
+          "item_id": "p1droppingin"
+        }
+      },
+      "HIPCAMP_ICAL_URLS": {
+        "HillTop #1": "https://www.hipcamp.com/en-US/bookings/your-ical-url-1",
+        "#1 Dropping In": "https://www.hipcamp.com/en-US/bookings/your-ical-url-2"
+      }
+    }
+    ```
+
 ### Step 2: Configure Terraform Variables
 
 Create a `terraform.tfvars` file in the `terraform` directory to store your sensitive and environment-specific variables. Do **not** commit this file to version control.
@@ -189,6 +226,18 @@ Once the secrets are populated and variables are configured, you can deploy the 
     ```
 
 Terraform will provision all the necessary AWS resources. After the deployment is complete, it will output the `api_gateway_endpoint`, which you will need to provide to HipCamp to set up the webhook.
+
+## Manual Configuration Steps
+
+Before deploying, and for the sync to work correctly, you need to set up your Google Calendars.
+
+1.  **Create a Main Google Calendar**: This will be used for an overall view of all bookings. You can name it whatever you like (e.g., "Campground Bookings").
+2.  **Create Site-Specific Public Calendars**: For each campsite you want to sync (e.g., "P1", "P2"), create a separate Google Calendar.
+    *   Make sure each of these calendars is **publicly accessible** so that Hipcamp can read them.
+    *   The names of these calendars should correspond to the `SITE_ID_MAPPING` you will set up in the next step.
+3.  **Link Calendars to Hipcamp**: For each site in Hipcamp, you need to add the corresponding Google Calendar.
+    *   In the Google Calendar settings for each site-specific calendar, find the "Integrate calendar" section and copy the **Public address in iCal format**.
+    *   In your Hipcamp account, go to the calendar settings for the site and add the iCal link as an external calendar. This allows Hipcamp to block off dates based on your Google Calendar.
 
 ## DNS Configuration for Email
 

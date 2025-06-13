@@ -45,6 +45,11 @@ resource "aws_secretsmanager_secret" "google_token" {
   description = "Google API token (from token.json)."
 }
 
+resource "aws_secretsmanager_secret" "site_configuration" {
+  name = "site_configuration"
+  description = "Configuration for site mappings, iCal URLs, etc."
+}
+
 # IAM role for the Lambda function
 resource "aws_iam_role" "lambda_exec_role" {
   name = "${var.function_name}-role"
@@ -85,7 +90,8 @@ resource "aws_iam_policy" "lambda_exec_policy" {
         Resource = [
           aws_secretsmanager_secret.checkfront_credentials.arn,
           aws_secretsmanager_secret.google_credentials.arn,
-          aws_secretsmanager_secret.google_token.arn
+          aws_secretsmanager_secret.google_token.arn,
+          aws_secretsmanager_secret.site_configuration.arn
         ]
       },
       {

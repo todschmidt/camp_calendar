@@ -193,3 +193,13 @@ __pycache__/
 *.pyd
 venv/
 .venv/
+
+# User-specific configurations
+checkfront_credentials.json
+google_credentials.json
+token.json
+site_configuration.json
+
+# Terraform state
+terraform/terraform.tfstate
+terraform/terraform.tfstate.backup

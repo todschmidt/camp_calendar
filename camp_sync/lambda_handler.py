@@ -50,12 +50,14 @@ def lambda_handler(event, context):
         checkfront_creds = get_secret("checkfront_credentials")
         google_creds = get_secret("google_credentials")
         google_token = get_secret("google_token")
+        site_config = get_secret("site_configuration")
 
         # The core script expects credentials to be in files.
         # We'll write them to the /tmp/ directory, which is writable in Lambda.
         checkfront_path = "/tmp/checkfront_credentials.json"
         google_creds_path = "/tmp/google_credentials.json"
         google_token_path = "/tmp/token.json"
+        site_config_path = "/tmp/site_configuration.json"
 
         with open(checkfront_path, "w") as f:
             f.write(checkfront_creds)
@@ -63,11 +65,14 @@ def lambda_handler(event, context):
             f.write(google_creds)
         with open(google_token_path, "w") as f:
             f.write(google_token)
+        with open(site_config_path, "w") as f:
+            f.write(site_config)
 
         # Set environment variables to point to the temp credential files
         os.environ["CHECKFRONT_CREDENTIALS_PATH"] = checkfront_path
         os.environ["GOOGLE_CREDENTIALS_PATH"] = google_creds_path
         os.environ["GOOGLE_TOKEN_PATH"] = google_token_path
+        os.environ["SITE_CONFIG_PATH"] = site_config_path
 
         print("Starting calendar sync process...")
         run_sync()
