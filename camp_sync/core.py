@@ -40,7 +40,7 @@ import time
 import base64
 import argparse
 from enum import Enum, auto
-from typing import List, Optional, Dict, Union
+from typing import List, Optional, Dict, Union, Tuple
 from icalendar import Calendar, vDate
 
 from google.auth.transport.requests import Request
@@ -156,6 +156,12 @@ CHECKFRONT_ICAL_URL = "https://dupont-bike-retreat.checkfront.com/view/bookings/
 # Checkfront API configuration
 CHECKFRONT_HOST = "dupont-bike-retreat.checkfront.com"
 
+# Number of days in the past to sync events from
+SYNC_RANGE_DAYS = 90
+
+# The API client will be initialized inside run_sync, once credentials are loaded.
+checkfront = None
+
 class LogLevel(Enum):
     """Logging levels for the script."""
     NORMAL = auto()
@@ -233,48 +239,23 @@ def get_log_level(verbose_count: int) -> LogLevel:
 # Initialize logger with default level
 logger = Logger(LogLevel.NORMAL)
 
-def load_checkfront_credentials() -> tuple[str, str]:
+def load_checkfront_credentials() -> Tuple[str, str]:
     """
-    Load Checkfront API credentials from the credentials file.
+    Load Checkfront API credentials from a JSON file.
     
     Returns:
-        Tuple of (api_key, api_secret)
-        
-    Raises:
-        FileNotFoundError: If credentials file doesn't exist
-        ValueError: If credentials file is invalid or missing required fields
+        A tuple containing the API key and secret.
     """
-    credentials_path = "checkfront_credentials.json"
-    if not os.path.exists(credentials_path):
-        raise FileNotFoundError(
-            f"Checkfront credentials file not found: {credentials_path}\n"
-            "Please copy checkfront_credentials.example.json to checkfront_credentials.json "
-            "and fill in your credentials."
-        )
-        
-    try:
-        with open(credentials_path) as f:
-            credentials = json.load(f)
-            
-        api_key = credentials.get("api_key")
-        api_secret = credentials.get("api_secret")
-        
-        if not api_key or not api_secret:
-            raise ValueError(
-                "Checkfront credentials file is missing required fields. "
-                "Please ensure both api_key and api_secret are set."
-            )
-            
-        return api_key, api_secret
-        
-    except json.JSONDecodeError:
-        raise ValueError(
-            "Invalid JSON in Checkfront credentials file. "
-            "Please check the file format."
-        )
+    # Path to credentials file can be overridden by an environment variable.
+    creds_path_env = os.environ.get("CHECKFRONT_CREDENTIALS_PATH")
+    path = creds_path_env or "checkfront_credentials.json"
+    
+    logger.debug(f"Env var CHECKFRONT_CREDENTIALS_PATH: {creds_path_env}")
+    logger.debug(f"Attempting to load Checkfront credentials from: {path}")
 
-# Load Checkfront credentials
-CHECKFRONT_API_KEY, CHECKFRONT_API_SECRET = load_checkfront_credentials()
+    with open(path, "r") as f:
+        credentials = json.load(f)
+    return credentials["api_key"], credentials["api_secret"]
 
 class CalendarEvent:
     """
@@ -907,13 +888,6 @@ class CheckfrontAPI:
             # Clear session ID
             self._session_id = None
 
-# Create Checkfront API client
-checkfront = CheckfrontAPI(
-    CHECKFRONT_HOST,
-    CHECKFRONT_API_KEY,
-    CHECKFRONT_API_SECRET
-)
-
 def get_site_display_name(site_name: str) -> str:
     """
     Convert HipCamp site names to display names.
@@ -929,37 +903,41 @@ def get_site_display_name(site_name: str) -> str:
 
 def get_google_credentials(force_refresh: bool = False) -> Credentials:
     """
-    Get Google Calendar API credentials, optionally forcing a refresh.
+    Get Google Calendar API credentials.
+    Handles token refresh and initial authentication.
     
     Args:
-        force_refresh: If True, forces new authentication even if token exists
+        force_refresh: If True, force a re-authentication.
         
     Returns:
-        Credentials object for Google Calendar API
+        Google Calendar API credentials
     """
     creds = None
+    # Paths to credential files can be overridden by environment variables.
+    token_path_env = os.environ.get("GOOGLE_TOKEN_PATH")
+    creds_path_env = os.environ.get("GOOGLE_CREDENTIALS_PATH")
     
-    if not force_refresh and os.path.exists("token.json"):
-        creds = Credentials.from_authorized_user_file("token.json", SCOPES)
+    token_path = token_path_env or "token.json"
+    credentials_path = creds_path_env or "google_credentials.json"
+
+    logger.debug(f"Env var GOOGLE_TOKEN_PATH: {token_path_env}")
+    logger.debug(f"Using Google token path: {token_path}")
+    logger.debug(f"Env var GOOGLE_CREDENTIALS_PATH: {creds_path_env}")
+    logger.debug(f"Using Google credentials path: {credentials_path}")
+
+    # The file token.json stores the user's access and refresh tokens
+    if not force_refresh and os.path.exists(token_path):
+        creds = Credentials.from_authorized_user_file(token_path, SCOPES)
     
-    # If credentials don't exist or are invalid, get new ones
-    if force_refresh or not creds or not creds.valid:
+    if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            try:
-                creds.refresh(Request())
-            except Exception as e:
-                logger.warn(f"Error refreshing token: {e}")
-                logger.warn("Forcing new authentication...")
-                creds = None
-        
-        if not creds:
+            creds.refresh(Request())
+        else:
             flow = InstalledAppFlow.from_client_secrets_file(
-                "credentials.json", SCOPES
+                credentials_path, SCOPES
             )
             creds = flow.run_local_server(port=0)
-            
-        # Save the credentials for the next run
-        with open("token.json", "w") as token:
+        with open(token_path, "w") as token:
             token.write(creds.to_json())
             
     return creds
@@ -987,21 +965,21 @@ def extract_booking_id(description: str) -> Optional[str]:
 def fetch_hipcamp_events() -> List[CalendarEvent]:
     """
     Fetch events from all HipCamp iCal feeds and convert them to CalendarEvent objects.
-    
-    Returns:
-        List of CalendarEvent objects
-        
-    Raises:
-        requests.exceptions.RequestException: If any API request fails
     """
     all_events = []
+    # Add cache-busting headers to ensure we get fresh data
+    headers = {
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache',
+        'Expires': '0'
+    }
     
     for site_name, url in HIPCAMP_ICAL_URLS.items():
         if not url:  # Skip if URL is not set
             continue
             
         try:
-            response = requests.get(url)
+            response = requests.get(url, headers=headers)
             response.raise_for_status()
             
             # Parse the iCal data
@@ -1165,17 +1143,17 @@ def extract_checkfront_booking_id(url: str) -> Optional[str]:
 def fetch_checkfront_events() -> List[CalendarEvent]:
     """
     Fetch events from Checkfront iCal feed and convert them to CalendarEvent objects.
-    
-    Returns:
-        List of CalendarEvent objects
-        
-    Raises:
-        requests.exceptions.RequestException: If the API request fails
     """
     all_events = []
+    # Add cache-busting headers to ensure we get fresh data
+    headers = {
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache',
+        'Expires': '0'
+    }
     
     try:
-        response = requests.get(CHECKFRONT_ICAL_URL)
+        response = requests.get(CHECKFRONT_ICAL_URL, headers=headers)
         response.raise_for_status()
         
         # Parse the iCal data
@@ -1434,6 +1412,14 @@ def sync_events_to_calendar(
     # Delete events that no longer exist in either source
     for key, event in existing_events_map.items():
         if key not in new_events:
+            # Don't delete events that are already in the past
+            if normalize_datetime(event.end_time) <= now:
+                logger.debug(
+                    f"Skipping deletion of past event: {event.summary} "
+                    f"(ended {event.end_time})"
+                )
+                continue
+
             try:
                 google_event_id = google_event_ids.get(key)
                 if google_event_id:
@@ -1606,63 +1592,54 @@ def sync_events_to_calendar(
                 logger.warn(f"Error syncing event: {error}")
 
 
-def main():
-    """
-    Main function that orchestrates the calendar sync process.
-    
-    This function:
-    1. Authenticates with Google Calendar API
-    2. Finds the target calendars
-    3. Fetches events from Google Calendar, HipCamp, and Checkfront
-    4. Syncs the events
-    
-    The script requires:
-    - Google Calendar API credentials (credentials.json)
-    - Checkfront API credentials (checkfront_credentials.json)
-    - HipCamp iCal URLs in the HIPCAMP_ICAL_URLS dictionary
-    - Checkfront iCal URL in CHECKFRONT_ICAL_URL
-    """
-    # Parse command line arguments
-    args = parse_args()
-    global logger
-    logger = Logger(get_log_level(args.verbose))
-    
-    # Get credentials without forcing refresh
-    creds = get_google_credentials(force_refresh=False)
-
+def run_sync():
+    """The core logic for the calendar sync process."""
+    global checkfront
     try:
-        service = build("calendar", "v3", credentials=creds)
-
-        # First, list all calendars to find the DBR Camping calendar and site-specific calendars
-        logger.normal("Listing all calendars...")
-        calendar_list = service.calendarList().list().execute()
+        # --- Initialize API Clients ---
+        # Credentials are now loaded here, at runtime, not during import.
+        logger.normal("Loading credentials...")
+        checkfront_api_key, checkfront_api_secret = load_checkfront_credentials()
+        checkfront = CheckfrontAPI(
+            CHECKFRONT_HOST,
+            checkfront_api_key,
+            checkfront_api_secret
+        )
+        
+        # Get Google Calendar service
+        logger.normal("Authenticating with Google Calendar...")
+        service = build("calendar", "v3", credentials=get_google_credentials())
+        
+        # --- Main Logic ---
+        # Get the ID of the main DBR Camping calendar
         dbr_calendar_id = None
         site_calendars = {}
         
-        for calendar in calendar_list.get('items', []):
-            logger.debug(f"Calendar: {calendar['summary']} (ID: {calendar['id']})")
-            if calendar['summary'] == "DBR Camping":
-                dbr_calendar_id = calendar['id']
-            # Look for site-specific calendars (e.g., "P8 Checkfront")
-            for site_code in SITE_DISPLAY_NAMES.values():
-                if calendar['summary'] == f"{site_code} Checkfront":
-                    site_calendars[site_code] = calendar['id']
+        calendar_list = service.calendarList().list().execute()
+        for calendar_list_entry in calendar_list["items"]:
+            if calendar_list_entry["summary"] == "DBR Camping":
+                dbr_calendar_id = calendar_list_entry["id"]
+            # Check for site-specific calendars (e.g., "HT1 Checkfront")
+            elif calendar_list_entry["summary"].endswith(" Checkfront"):
+                site_code = calendar_list_entry["summary"].split(" ")[0]
+                site_calendars[site_code] = calendar_list_entry["id"]
         
         if not dbr_calendar_id:
-            logger.warn("DBR Camping calendar not found!")
+            logger.normal("Main 'DBR Camping' calendar not found.")
             return
 
-        # Get events from all sources
-        start_time = datetime.datetime.now(tz=datetime.timezone.utc)
+        logger.normal(f"Found main calendar: DBR Camping (ID: {dbr_calendar_id})")
+        logger.normal(f"Found {len(site_calendars)} site-specific calendars.")
+
+        # Get existing events from Google Calendar
+        now = datetime.datetime.now(datetime.timezone.utc)
+        start_time = now - datetime.timedelta(days=SYNC_RANGE_DAYS)
         
-        # Get Google Calendar events for main calendar
+        logger.normal("Fetching existing events from Google Calendar...")
         google_events = get_google_calendar_events(
             service, dbr_calendar_id, start_time
         )
-        logger.normal(
-            f"\nFound {len(google_events)} events in Google Calendar "
-            f"(DBR Camping)"
-        )
+        logger.normal(f"Found {len(google_events)} events in Google Calendar")
         
         # Get HipCamp events
         hipcamp_events = fetch_hipcamp_events()
@@ -1714,12 +1691,35 @@ def main():
     except HttpError as error:
         if "insufficientPermissions" in str(error):
             logger.warn(
-                "Error: Insufficient permissions to access Google Calendar. "
+                "Error: Insufficient permissions to modify the calendar. "
                 "Please check your Google Calendar API scopes and "
-                "ensure you have the necessary permissions."
+                "ensure you have write access to the calendar."
             )
         else:
             logger.warn(f"An error occurred: {error}")
+    except Exception as e:
+        logger.normal(f"An unexpected error occurred: {e}")
+
+
+def main():
+    """
+    Main command-line function to run the calendar sync process.
+    """
+    parser = argparse.ArgumentParser(
+        description="Sync calendars between HipCamp, Checkfront, and Google Calendar."
+    )
+    parser.add_argument(
+        "-v", "--verbose", action="count", default=0, help="Increase verbosity"
+    )
+    args = parser.parse_args()
+
+    # Set log level based on verbosity
+    if args.verbose >= 2:
+        logger.level = LogLevel.DEBUG
+    elif args.verbose == 1:
+        logger.level = LogLevel.NORMAL
+
+    run_sync()
 
 
 if __name__ == "__main__":
