@@ -1,16 +1,39 @@
 # Camp Calendar Sync
 
-This project automatically synchronizes bookings from HipCamp and Checkfront to a central Google Calendar. It is designed to run as a serverless function on AWS Lambda.
+This project automatically synchronizes bookings from HipCamp to a central Google Calendar and Checkfront account. It is designed to run as a serverless application on AWS.
+
+A key feature of this system is its ability to handle real-time booking notifications from Checkfront via webhooks, ensuring that new reservations are processed and reflected in Checkfront almost instantly.
+
+The email gateway is set up so you can set up a forwarding rule from your email account to sync@<YOUR DOMAIN> which will trigger the sync process.
 
 ## Architecture
 
-The application is deployed on AWS and uses the following services:
+The application is deployed on AWS and orchestrated with Terraform. The architecture is designed to be event-driven, scalable, and resilient.
 
--   **AWS Lambda**: Hosts the Python script that performs the synchronization logic.
--   **Amazon EventBridge**: Triggers the Lambda function on a recurring schedule (e.g., every hour).
--   **AWS Lambda Layer**: Manages and packages all third-party Python dependencies (`requests`, `google-api-python-client`, etc.) to keep the main function code lightweight.
+-   **API Gateway**: Acts as the public-facing endpoint for the Checkfront webhook. When a new booking is made, Checkfront sends a notification to this endpoint.
+-   **Amazon SQS (Simple Queue Service)**: The API Gateway forwards incoming webhook payloads to an SQS queue. This decouples the ingestion of bookings from their processing, ensuring that no notifications are lost even if the processing logic fails or is temporarily unavailable.
+-   **AWS Lambda**: This is the core of the application. The Lambda function is triggered by new messages in the SQS queue. It parses the booking information and then creates a corresponding reservation in Checkfront and an event in Google Calendar.
+-   **Amazon SNS (Simple Notification Service)**: If the Lambda function fails to process a booking after several retries, the message is sent to a Dead-Letter Queue (DLQ). An SNS topic is subscribed to this DLQ, which then sends an email notification to an administrator, flagging the issue for manual intervention.
+-   **Amazon EventBridge**: Triggers the Lambda function on a recurring schedule to perform routine checks, such as verifying credentials or syncing data that may have been missed.
 -   **AWS Secrets Manager**: Securely stores all necessary credentials (Checkfront API keys, Google API tokens), which are fetched by the Lambda function at runtime.
--   **Terraform**: The entire AWS infrastructure is defined as code using Terraform, allowing for repeatable and automated deployments.
+-   **Terraform**: The entire AWS infrastructure is defined as code using Terraform, allowing for repeatable and 
+automated deployments.
+
+### Architectural Diagram
+
+```
++----------------+      +-------------+      +-------------+      +-----------------+
+| HipCamp        |----->| API Gateway |----->| SQS Queue   |----->| AWS Lambda      |
+| (Webhook)      |      +-------------+      +-------------+      | (Processing)    |
++----------------+                                               +-------+---------+
+                                                                         |
+                                                                         |
+                                                               +---------v---------+
+                                                               | Checkfront API    |
+                                                               +-------------------+
+                                                               | Google Calendar   |
+                                                               +-------------------+
+```
 
 ---
 
@@ -19,12 +42,13 @@ The application is deployed on AWS and uses the following services:
 ```
 .
 ├── camp_sync/
-│   ├── core.py             # Main application logic
-│   ├── lambda_handler.py   # AWS Lambda entry point
+│   ├── lambda_handler.py   # AWS Lambda entry point & core logic
 │   └── requirements.txt    # Python dependencies
 ├── terraform/
-│   ├── main.tf             # Terraform infrastructure definition
-│   └── build_layer.sh      # Script to package dependencies for the Lambda Layer
+│   ├── main.tf             # Main Terraform infrastructure definition
+│   ├── variables.tf        # Variable definitions
+│   ├── outputs.tf          # Output definitions
+│   └── .tfvars.example     # Example variables file for sensitive data
 └── .gitignore              # Files to ignore in version control
 ```
 
@@ -52,38 +76,21 @@ The script can still be run locally for testing. It will default to using local 
     -   `google_credentials.json` (obtained from Google Cloud Console)
     -   `token.json` (generated automatically on the first run)
 3.  **Run the script**:
+    The `debug_runner.py` script allows you to simulate a webhook event by reading a payload from a local file (`temp.txt`).
+
     ```bash
-    python camp_sync/core.py
+    python debug_runner.py
     ```
 
 ---
 
-## Monitoring and Manual Triggers
-
-The system includes features for monitoring failures and manually triggering a sync.
+## Monitoring and Notifications
 
 ### Failure Notifications
 
--   If the Lambda function repeatedly fails to process a message from Checkfront or via email, the message is sent to a Dead-Letter Queue (DLQ).
--   A CloudWatch Alarm monitors this DLQ. If a message appears in it, an email alert is sent to the `notification_email` you provide.
--   **Action Required**: Upon deploying, you will receive an email from AWS Notification. You **must click the confirmation link** in this email to activate the alert subscription.
-
-### Manual Trigger via Email
-
-You can manually start a sync process by sending an email to a configured address.
-
--   **Trigger Address**: `sync@your-domain.com` (where `your-domain.com` is the domain you provide).
--   The content of the email does not matter; the act of receiving it is what triggers the sync.
-
-#### Email Trigger Setup
-
-To enable this feature, you must prove to AWS that you own the domain.
-
-1.  **Run `terraform apply`**: After applying the configuration, Terraform will output a value for `ses_domain_verification_token`.
-2.  **Add a TXT Record**: Go to your DNS provider's control panel (e.g., GoDaddy, Namecheap, AWS Route 53) and add a new `TXT` record with the name `_amazonses.your-domain.com` and the value provided in the Terraform output.
-3.  **Wait for Verification**: It may take up to 72 hours for AWS to see the DNS record and verify the domain, but it usually happens within an hour. You can check the status in the AWS SES console under "Verified identities".
-
-Once the domain is verified, any email sent to the trigger address will start the sync process.
+-   If the Lambda function repeatedly fails to process a message from the SQS queue, the message is moved to a Dead-Letter Queue (DLQ).
+-   A CloudWatch Alarm monitors this DLQ. If a message appears, an SNS topic sends an email alert to the `notification_email` you provide.
+-   **Action Required**: When you first deploy, AWS will send a confirmation email. You **must click the link** in this email to activate the alert subscription.
 
 ---
 
@@ -150,9 +157,23 @@ Before deploying, you must create and populate the secrets in AWS Secrets Manage
     }
     ```
 
-### Step 2: Deploy with Terraform
+### Step 2: Configure Terraform Variables
 
-Once the secrets are populated, you can deploy the infrastructure.
+Create a `terraform.tfvars` file in the `terraform` directory to store your sensitive and environment-specific variables. Do **not** commit this file to version control.
+
+A `terraform.tfvars.example` is provided as a template:
+
+```hcl
+# terraform/terraform.tfvars
+
+aws_region           = "us-west-2"
+notification_email   = "your-email@example.com"
+hipcamp_api_key      = "your-hipcamp-api-key"
+```
+
+### Step 3: Deploy with Terraform
+
+Once the secrets are populated and variables are configured, you can deploy the infrastructure.
 
 1.  **Navigate to the terraform directory**:
     ```bash
@@ -167,4 +188,53 @@ Once the secrets are populated, you can deploy the infrastructure.
     terraform apply
     ```
 
-Terraform will build the dependency layer, package the function, and create all the necessary AWS resources. Your function will now be live and running on an hourly schedule.
+Terraform will provision all the necessary AWS resources. After the deployment is complete, it will output the `api_gateway_endpoint`, which you will need to provide to HipCamp to set up the webhook.
+
+## DNS Configuration for Email
+
+To ensure that Amazon SES can correctly receive emails on your behalf, you need to configure several DNS records for your domain.
+
+### 1. MX Record
+
+This record directs your domain's incoming mail to the Amazon SES endpoint. Note that you must use the endpoint for an AWS region that supports SES email receiving, such as `us-east-1`.
+
+| Type | Host/Name | Value                                     | Priority |
+| :--- | :-------- | :---------------------------------------- | :------- |
+| MX   | @ or `your-domain.com` | `inbound-smtp.us-east-1.amazonaws.com`      | 10       |
+
+### 2. SES Domain Verification TXT Record
+
+This record proves to AWS that you own the domain. The value for this record is provided in the Terraform output `ses_domain_verification_token`.
+
+| Type | Host/Name                     | Value                                     |
+| :--- | :---------------------------- | :---------------------------------------- |
+| TXT  | `_amazonses.your-domain.com` | `value-from-terraform-output`             |
+
+### 3. DMARC Record
+
+A DMARC record is a standard that helps protect your domain from being used for email spoofing. While not strictly required for the trigger to work, it is highly recommended for security. A basic permissive record is shown below.
+
+| Type | Host/Name                     | Value                                     |
+| :--- | :---------------------------- | :---------------------------------------- |
+| TXT  | `_dmarc.your-domain.com`      | `v=DMARC1; p=none;`                       |
+
+**Note**: DNS changes can take up to 48 hours to propagate, but they are often visible much sooner. You can use tools like `nslookup` to check if your records are live.
+
+---
+
+## Troubleshooting
+
+If you encounter issues, here are the primary places to look for logs and error information in AWS CloudWatch:
+
+1.  **Lambda Function Logs**:
+    *   **Log Group**: `/aws/lambda/camp-calendar-sync` (or your chosen `function_name`).
+    *   **What to look for**: This is the best place to start. You'll find detailed execution logs from the Python script, including any errors encountered while processing bookings, calling Checkfront APIs, or interacting with Google Calendar.
+
+2.  **API Gateway Access Logs**:
+    *   **Log Group**: `/aws/api_gateway/camp-calendar-sync-webhook-api`.
+    *   **What to look for**: These logs show every request made to your webhook endpoint. Check here to confirm that Checkfront is successfully sending webhook notifications. You can see the request details, source IP, and status codes.
+
+3.  **SQS Dead-Letter Queue (DLQ)**:
+    *   **Queue Name**: `camp-calendar-sync-dlq`.
+    *   **What to look for**: If a message fails processing in the Lambda function multiple times, it will be sent to this queue. You should have an SNS alarm configured to notify you, but you can also manually inspect the queue in the AWS SQS console to see the failed message payloads. This is crucial for debugging persistent processing failures.
+
