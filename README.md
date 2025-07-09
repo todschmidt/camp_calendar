@@ -1,10 +1,10 @@
 # Camp Calendar Sync
 
-This project automatically synchronizes bookings from HipCamp to a central Google Calendar and Checkfront account. It is designed to run as a serverless application on AWS.
+This project automatically synchronizes bookings from HipCamp and Checkfront to a central Google Calendar. It uses individual google calendars to sync back to HipCamp.  It is designed to run as a serverless application on AWS.
 
-A key feature of this system is its ability to handle real-time booking notifications from Checkfront via webhooks, ensuring that new reservations are processed and reflected in Checkfront almost instantly.
+A key feature of this system is its ability to handle real-time booking notifications from Checkfront via webhooks, ensuring that new reservations are processed and reflected in HipCamp to avoid double bookings.
 
-The email gateway is set up so you can set up a forwarding rule from your email account to sync@<YOUR DOMAIN> which will trigger the sync process.
+The email gateway is set up so you can set up a forwarding rule from your email account to sync@YOURDOMAIN which will trigger the sync process. This is used to forward HipCamp bookings using Gmail rules and trigger a sync to create a dummy CheckFront booking to avoid double bookings.
 
 ## Architecture
 
@@ -14,6 +14,7 @@ The application is deployed on AWS and orchestrated with Terraform. The architec
 -   **Amazon SQS (Simple Queue Service)**: The API Gateway forwards incoming webhook payloads to an SQS queue. This decouples the ingestion of bookings from their processing, ensuring that no notifications are lost even if the processing logic fails or is temporarily unavailable.
 -   **AWS Lambda**: This is the core of the application. The Lambda function is triggered by new messages in the SQS queue. It parses the booking information and then creates a corresponding reservation in Checkfront and an event in Google Calendar.
 -   **Amazon SNS (Simple Notification Service)**: If the Lambda function fails to process a booking after several retries, the message is sent to a Dead-Letter Queue (DLQ). An SNS topic is subscribed to this DLQ, which then sends an email notification to an administrator, flagging the issue for manual intervention.
+    This is also used to handle incoming emails to sync@YOURDOMAIN which then simply adds an event to the SQS queue to trigger the sync process.
 -   **Amazon EventBridge**: Triggers the Lambda function on a recurring schedule to perform routine checks, such as verifying credentials or syncing data that may have been missed.
 -   **AWS Secrets Manager**: Securely stores all necessary credentials (Checkfront API keys, Google API tokens), which are fetched by the Lambda function at runtime.
 -   **Terraform**: The entire AWS infrastructure is defined as code using Terraform, allowing for repeatable and 
@@ -78,7 +79,7 @@ The script can still be run locally for testing. It will default to using local 
     -   `token.json` (generated automatically on the first run after auth)
     -   `site_configuration.json` (from `site_configuration.example.json`)
 
-    For local development, you must rename `site_configuration.example.json` to `site_configuration.json` and fill in your actual Checkfront and Hipcamp details.
+    For local development, you must copy the example files and fill in your actual Google, Checkfront, and Hipcamp details.
 
 3.  **Run the script**:
     The `debug_runner.py` script allows you to simulate a webhook event by reading a payload from a local file (`temp.txt`).
