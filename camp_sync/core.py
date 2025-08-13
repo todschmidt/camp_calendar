@@ -840,6 +840,69 @@ class CheckfrontAPI:
             # Clear session ID
             self._session_id = None
 
+    def delete_booking(self, booking_id: str) -> bool:
+        """
+        Delete a Checkfront booking.
+        
+        Args:
+            booking_id: The ID of the booking to delete
+            
+        Returns:
+            True if successfully deleted, False otherwise
+            
+        Raises:
+            requests.exceptions.RequestException: If the API request fails
+        """
+        try:
+            logger.normal(f"Deleting Checkfront booking: {booking_id}")
+            
+            response = self._make_request(
+                endpoint=f"booking/{booking_id}",
+                method="DELETE"
+            )
+            
+            # Checkfront API typically returns success response for deletions
+            logger.normal(f"Successfully deleted Checkfront booking: {booking_id}")
+            return True
+            
+        except Exception as e:
+            logger.normal(f"Error deleting Checkfront booking {booking_id}: {e}")
+            return False
+
+    def delete_hipcamp_booking(self, hipcamp_id: str) -> bool:
+        """
+        Delete a Checkfront booking that was created for a HipCamp reservation.
+        
+        Args:
+            hipcamp_id: The HipCamp booking ID
+            
+        Returns:
+            True if successfully deleted, False otherwise
+        """
+        try:
+            # Get the mapping to find the Checkfront booking ID
+            hipcamp_mapping = self.get_hipcamp_event_mapping()
+            checkfront_booking_id = hipcamp_mapping.get(hipcamp_id)
+            
+            if not checkfront_booking_id:
+                logger.debug(
+                    f"No Checkfront booking found for HipCamp ID: {hipcamp_id}"
+                )
+                return False
+            
+            logger.normal(
+                f"Found Checkfront booking {checkfront_booking_id} "
+                f"for HipCamp booking {hipcamp_id}, deleting..."
+            )
+            
+            return self.delete_booking(checkfront_booking_id)
+            
+        except Exception as e:
+            logger.normal(
+                f"Error deleting HipCamp booking {hipcamp_id}: {e}"
+            )
+            return False
+
 def get_site_display_name(site_name: str) -> str:
     """
     Convert HipCamp site names to display names.
@@ -1384,6 +1447,15 @@ def sync_events_to_calendar(
                             f"Deleted HipCamp event: {event.summary} "
                             f"(ID: {event.source_id})"
                         )
+                        # Also delete the associated Checkfront booking
+                        if event.source_id and checkfront:
+                            try:
+                                checkfront.delete_hipcamp_booking(event.source_id)
+                            except Exception as e:
+                                logger.warn(
+                                    f"Error deleting Checkfront booking for "
+                                    f"HipCamp ID {event.source_id}: {e}"
+                                )
                     else:
                         logger.normal(
                             f"Deleted Checkfront event: {event.summary} "
