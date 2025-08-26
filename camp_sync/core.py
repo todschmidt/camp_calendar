@@ -146,6 +146,33 @@ def get_log_level(verbose_count: int) -> LogLevel:
 # Initialize logger with default level
 logger = Logger(LogLevel.NORMAL)
 
+
+def format_event_date_for_logging(event) -> str:
+    """
+    Format event date information for logging messages.
+    
+    Args:
+        event: Event object with start_time and end_time attributes
+        
+    Returns:
+        Formatted date string for logging
+    """
+    try:
+        if hasattr(event, 'start_time') and event.start_time:
+            start_date = event.start_time.strftime("%Y-%m-%d")
+            if hasattr(event, 'end_time') and event.end_time:
+                end_date = event.end_time.strftime("%Y-%m-%d")
+                if start_date == end_date:
+                    return f"({start_date})"
+                else:
+                    return f"({start_date} to {end_date})"
+            else:
+                return f"({start_date})"
+        else:
+            return "(no date)"
+    except Exception:
+        return "(date error)"
+
 def load_site_configuration():
     """
     Load site display names, Checkfront mappings, and iCal URLs from a JSON file.
@@ -789,9 +816,10 @@ class CheckfrontAPI:
                 logger.normal(f"Failed to create Checkfront booking: {error_msg}")
                 return None
             
+            date_info = format_event_date_for_logging(event)
             logger.normal(
                 f"Creating Checkfront booking for {site_display_name} "
-                f"(HipCamp ID: {event.source_id})"
+                f"(HipCamp ID: {event.source_id}) {date_info}"
             )
             
             # Create booking session
@@ -823,7 +851,7 @@ class CheckfrontAPI:
             if booking_id:
                 logger.normal(
                     f"Created Checkfront booking {booking_id} for {site_display_name} "
-                    f"(HipCamp ID: {event.source_id})"
+                    f"(HipCamp ID: {event.source_id}) {date_info}"
                 )
             else:
                 logger.normal(
@@ -1045,7 +1073,7 @@ def fetch_hipcamp_events() -> List[CalendarEvent]:
                 all_events.append(event)
                 
         except requests.exceptions.RequestException as e:
-            logger.warn(f"Error fetching events for {site_name}: {e}")
+            logger.normal(f"Error fetching events for {site_name}: {e}")
             continue
             
     return all_events
@@ -1160,6 +1188,10 @@ def fetch_checkfront_events() -> List[CalendarEvent]:
     Fetch events from Checkfront iCal feed and convert them to CalendarEvent objects.
     """
     all_events = []
+    
+    # Debug: Log Checkfront iCal URL
+    logger.debug(f"🔍 CHECKFRONT DEBUG: Fetching from URL: {CHECKFRONT_ICAL_URL}")
+    
     # Add cache-busting headers to ensure we get fresh data
     headers = {
         'Cache-Control': 'no-cache, no-store, must-revalidate',
@@ -1171,8 +1203,16 @@ def fetch_checkfront_events() -> List[CalendarEvent]:
         response = requests.get(CHECKFRONT_ICAL_URL, headers=headers)
         response.raise_for_status()
         
+        # Debug: Log response details
+        logger.debug(f"🔍 CHECKFRONT DEBUG: Response status: {response.status_code}")
+        logger.debug(f"🔍 CHECKFRONT DEBUG: Response size: {len(response.text)} characters")
+        logger.debug(f"🔍 CHECKFRONT DEBUG: Response headers: {dict(response.headers)}")
+        
         # Parse the iCal data
         cal = Calendar.from_ical(response.text)
+        
+        # Debug: Log calendar parsing
+        logger.debug(f"🔍 CHECKFRONT DEBUG: Parsed calendar with {len(cal.walk('VEVENT'))} events")
         
         for event in cal.walk("VEVENT"):
             # Get the booking ID from the URL
@@ -1204,6 +1244,9 @@ def fetch_checkfront_events() -> List[CalendarEvent]:
             # Get guest info and location
             guest_info = str(event.get("summary", ""))
             
+            # Debug: Log event details being processed
+            logger.debug(f"🔍 CHECKFRONT DEBUG: Processing event - Summary: '{guest_info}', Location: '{event.get('location', 'N/A')}', Booking ID: {booking_id}")
+            
             # Skip events that were created from HipCamp bookings
             if "(HipCamp)" in guest_info:
                 logger.debug(f"Skipping Checkfront event from HipCamp: {guest_info}")
@@ -1214,6 +1257,9 @@ def fetch_checkfront_events() -> List[CalendarEvent]:
             # Clean up location name to match HipCamp format
             # Extract just the site code (e.g., "HT2" from "HT2 - HillTop Site#2")
             location = location.split("- ")[0].strip()
+            
+            # Debug: Log processed event
+            logger.debug(f"🔍 CHECKFRONT DEBUG: Created event - Location: '{location}', Guest: '{guest_info}', Dates: {start_time} to {end_time}")
             
             # Create the event
             event = CalendarEvent(
@@ -1227,7 +1273,12 @@ def fetch_checkfront_events() -> List[CalendarEvent]:
             all_events.append(event)
             
     except requests.exceptions.RequestException as e:
-        logger.warn(f"Error fetching events from Checkfront: {e}")
+        logger.normal(f"Error fetching events from Checkfront: {e}")
+    
+    # Debug: Log final result
+    logger.debug(f"🔍 CHECKFRONT DEBUG: Final result - {len(all_events)} events created")
+    for i, event in enumerate(all_events[:3]):  # Show first 3 events
+        logger.debug(f"🔍 CHECKFRONT DEBUG: Event {i+1}: {event.summary} (ID: {event.source_id})")
         
     return all_events
 
@@ -1379,8 +1430,16 @@ def sync_events_to_calendar(
     # Get current time in UTC
     now = datetime.datetime.now(datetime.timezone.utc)
     
+    # Debug: Log sync parameters
+    logger.debug(f"🔍 SYNC DEBUG: Calendar ID: {calendar_id}")
+    logger.debug(f"🔍 SYNC DEBUG: HipCamp events: {len(hipcamp_events)}")
+    logger.debug(f"🔍 SYNC DEBUG: Checkfront events: {len(checkfront_events)}")
+    logger.debug(f"🔍 SYNC DEBUG: Existing events: {len(existing_events)}")
+    logger.debug(f"🔍 SYNC DEBUG: Current time: {now}")
+    
     # Get mapping of HipCamp events to Checkfront events
     hipcamp_to_checkfront = checkfront.get_hipcamp_event_mapping()
+    logger.debug(f"🔍 SYNC DEBUG: HipCamp to Checkfront mapping: {len(hipcamp_to_checkfront)} entries")
     
     # Create a map of existing events by source and ID
     existing_events_map: Dict[tuple, CalendarEvent] = {}
@@ -1424,6 +1483,16 @@ def sync_events_to_calendar(
     # Combine all new events
     new_events = {**new_hipcamp_events, **new_checkfront_events}
     
+    # Debug: Log event processing
+    logger.debug(f"🔍 SYNC DEBUG: New HipCamp events: {len(new_hipcamp_events)}")
+    logger.debug(f"🔍 SYNC DEBUG: New Checkfront events: {len(new_checkfront_events)}")
+    logger.debug(f"🔍 SYNC DEBUG: Total new events: {len(new_events)}")
+    
+    # Debug: Show some event details
+    for source, event_id in list(new_events.keys())[:3]:
+        event = new_events[(source, event_id)]
+        logger.debug(f"🔍 SYNC DEBUG: Processing {source} event - ID: {event_id}, Summary: '{event.summary}'")
+    
     # Delete events that no longer exist in either source
     for key, event in existing_events_map.items():
         if key not in new_events:
@@ -1443,9 +1512,10 @@ def sync_events_to_calendar(
                         eventId=google_event_id
                     ).execute()
                     if event.source == "hipcamp":
+                        date_info = format_event_date_for_logging(event)
                         logger.normal(
                             f"Deleted HipCamp event: {event.summary} "
-                            f"(ID: {event.source_id})"
+                            f"(ID: {event.source_id}) {date_info}"
                         )
                         # Also delete the associated Checkfront booking
                         if event.source_id and checkfront:
@@ -1457,9 +1527,10 @@ def sync_events_to_calendar(
                                     f"HipCamp ID {event.source_id}: {e}"
                                 )
                     else:
+                        date_info = format_event_date_for_logging(event)
                         logger.normal(
                             f"Deleted Checkfront event: {event.summary} "
-                            f"(ID: {event.source_id})"
+                            f"(ID: {event.source_id}) {date_info}"
                         )
             except HttpError as error:
                 if "insufficientPermissions" in str(error):
@@ -1522,9 +1593,20 @@ def sync_events_to_calendar(
                         body=google_event
                     ).execute()
                     if source == "hipcamp":
+                        # Get the original event to extract date info
+                        original_event = None
+                        for event_list in [hipcamp_events, checkfront_events]:
+                            for evt in event_list:
+                                if hasattr(evt, 'source_id') and evt.source_id == source_id:
+                                    original_event = evt
+                                    break
+                            if original_event:
+                                break
+                        
+                        date_info = format_event_date_for_logging(original_event) if original_event else ""
                         logger.normal(
                             f"Updated HipCamp event: {summary} "
-                            f"(ID: {source_id})"
+                            f"(ID: {source_id}) {date_info}"
                         )
                         # Check if we need to create/update Checkfront booking
                         if source_id not in hipcamp_to_checkfront:
@@ -1539,7 +1621,7 @@ def sync_events_to_calendar(
                             if checkfront_id:
                                 logger.normal(
                                     f"Created Checkfront booking: {checkfront_id} "
-                                    f"for HipCamp booking {source_id}"
+                                    f"for HipCamp booking {source_id} {date_info}"
                                 )
                                 # Update the event with the Checkfront booking ID
                                 google_event["extendedProperties"][
@@ -1555,9 +1637,20 @@ def sync_events_to_calendar(
                                     f"with Checkfront booking {checkfront_id}"
                                 )
                     else:
+                        # Get the original event to extract date info
+                        original_event = None
+                        for event_list in [hipcamp_events, checkfront_events]:
+                            for evt in event_list:
+                                if hasattr(evt, 'source_id') and evt.source_id == source_id:
+                                    original_event = evt
+                                    break
+                            if original_event:
+                                break
+                        
+                        date_info = format_event_date_for_logging(original_event) if original_event else ""
                         logger.normal(
                             f"Updated Checkfront event: {summary} "
-                            f"(ID: {source_id})"
+                            f"(ID: {source_id}) {date_info}"
                         )
             else:
                 # Create new event
@@ -1566,9 +1659,10 @@ def sync_events_to_calendar(
                     body=google_event
                 ).execute()
                 if source == "hipcamp":
+                    date_info = format_event_date_for_logging(event)
                     logger.normal(
                         f"Created HipCamp event: {summary} "
-                        f"(ID: {source_id})"
+                        f"(ID: {source_id}) {date_info}"
                     )
                     # Create Checkfront booking for new HipCamp event
                     # Extract customer info from event description
@@ -1582,7 +1676,7 @@ def sync_events_to_calendar(
                     if checkfront_id:
                         logger.normal(
                             f"Created Checkfront booking: {checkfront_id} "
-                            f"for HipCamp booking {source_id}"
+                            f"for HipCamp booking {source_id} {date_info}"
                         )
                         # Update the event with the Checkfront booking ID
                         google_event["extendedProperties"][
@@ -1598,9 +1692,10 @@ def sync_events_to_calendar(
                             f"with Checkfront booking {checkfront_id}"
                         )
                 else:
+                    date_info = format_event_date_for_logging(event)
                     logger.normal(
                         f"Created Checkfront event: {summary} "
-                        f"(ID: {source_id})"
+                        f"(ID: {source_id}) {date_info}"
                     )
                 # Store the Google Calendar ID for future updates
                 google_event_ids[key] = created_event["id"]
@@ -1674,9 +1769,27 @@ def run_sync():
     hipcamp_events = fetch_hipcamp_events()
     logger.normal(f"Found {len(hipcamp_events)} events in HipCamp")
     
+    # Debug: Dump HipCamp events details
+    logger.debug("🔍 HIPCAMP EVENTS DETAILS:")
+    for i, event in enumerate(hipcamp_events[:3]):  # Show first 3 events
+        logger.debug(f"   {i+1}. Summary: '{event.summary}'")
+        logger.debug(f"      ID: {getattr(event, 'source_id', 'N/A')}")
+        logger.debug(f"      Start: {getattr(event, 'start_time', 'N/A')}")
+        logger.debug(f"      End: {getattr(event, 'end_time', 'N/A')}")
+        logger.debug(f"      Description: '{getattr(event, 'description', 'N/A')[:100]}...'")
+    
     # Get Checkfront events
     checkfront_events = fetch_checkfront_events()
     logger.normal(f"Found {len(checkfront_events)} events in Checkfront")
+    
+    # Debug: Dump Checkfront events details
+    logger.debug("🔍 CHECKFRONT EVENTS DETAILS:")
+    for i, event in enumerate(checkfront_events[:3]):  # Show first 3 events
+        logger.debug(f"   {i+1}. Summary: '{event.summary}'")
+        logger.debug(f"      ID: {getattr(event, 'source_id', 'N/A')}")
+        logger.debug(f"      Start: {getattr(event, 'start_time', 'N/A')}")
+        logger.debug(f"      End: {getattr(event, 'end_time', 'N/A')}")
+        logger.debug(f"      Description: '{getattr(event, 'description', 'N/A')[:100]}...'")
     
     # Sync events to main Google Calendar
     sync_events_to_calendar(
