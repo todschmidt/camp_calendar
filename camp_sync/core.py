@@ -826,11 +826,27 @@ class CheckfrontAPI:
             self.create_booking_session()
             
             # Add item to session
-            self.add_item_to_session(
-                item_id=cf_mapping["item_id"],
-                start_date=event.start_time.strftime("%Y-%m-%d"),
-                end_date=event.end_time.strftime("%Y-%m-%d")
-            )
+            try:
+                self.add_item_to_session(
+                    item_id=cf_mapping["item_id"],
+                    start_date=event.start_time.strftime("%Y-%m-%d"),
+                    end_date=event.end_time.strftime("%Y-%m-%d")
+                )
+            except ValueError as availability_error:
+                error_text = str(availability_error)
+                # Treat SOLDOUT/OVERBOOK/unavailable as "already booked" and skip creating
+                if (
+                    "SOLDOUT" in error_text
+                    or "OVERBOOK" in error_text
+                    or "unavailable" in error_text
+                ):
+                    logger.normal(
+                        f"Checkfront indicates dates are unavailable for {site_display_name} "
+                        f"(HipCamp ID: {event.source_id}) {date_info}. Skipping booking creation."
+                    )
+                    return None
+                # Otherwise, re-raise
+                raise
             
             # Create booking with customer info and HipCamp reference
             booking = self.create_booking(
@@ -1459,7 +1475,10 @@ def sync_events_to_calendar(
                         private_props = (
                             event.extendedProperties.get("private", {})
                         )
-                        cf_id = private_props.get("checkfront_event_id")
+                        cf_id = (
+                            private_props.get("checkfront_booking_id")
+                            or private_props.get("checkfront_event_id")
+                        )
                     logger.debug(
                         f"Existing HipCamp event - ID: {event.source_id}, "
                         f"Checkfront ID: {cf_id}"
@@ -1609,7 +1628,13 @@ def sync_events_to_calendar(
                             f"(ID: {source_id}) {date_info}"
                         )
                         # Check if we need to create/update Checkfront booking
+                        # Only create if this is a new HipCamp event that doesn't already have a Checkfront booking
+                        logger.debug(f"🔍 SYNC DEBUG: Checking if HipCamp event {source_id} needs Checkfront booking")
+                        logger.debug(f"🔍 SYNC DEBUG: Current mapping has {len(hipcamp_to_checkfront)} entries")
+                        logger.debug(f"🔍 SYNC DEBUG: HipCamp ID {source_id} in mapping: {source_id in hipcamp_to_checkfront}")
+                        
                         if source_id not in hipcamp_to_checkfront:
+                            logger.debug(f"Creating new Checkfront booking for HipCamp event {source_id} (not found in existing mapping)")
                             # Extract customer info from event description
                             customer_info = _extract_customer_info_from_hipcamp_event(event)
                             
@@ -1626,7 +1651,7 @@ def sync_events_to_calendar(
                                 # Update the event with the Checkfront booking ID
                                 google_event["extendedProperties"][
                                     "private"
-                                ]["checkfront_event_id"] = checkfront_id
+                                ]["checkfront_booking_id"] = checkfront_id
                                 service.events().update(
                                     calendarId=calendar_id,
                                     eventId=google_event_id,
@@ -1636,6 +1661,8 @@ def sync_events_to_calendar(
                                     f"Linked HipCamp booking {source_id} "
                                     f"with Checkfront booking {checkfront_id}"
                                 )
+                        else:
+                            logger.debug(f"🔍 SYNC DEBUG: HipCamp event {source_id} already has Checkfront booking, skipping creation")
                     else:
                         # Get the original event to extract date info
                         original_event = None
@@ -1681,7 +1708,7 @@ def sync_events_to_calendar(
                         # Update the event with the Checkfront booking ID
                         google_event["extendedProperties"][
                             "private"
-                        ]["checkfront_event_id"] = checkfront_id
+                        ]["checkfront_booking_id"] = checkfront_id
                         service.events().update(
                             calendarId=calendar_id,
                             eventId=created_event["id"],
